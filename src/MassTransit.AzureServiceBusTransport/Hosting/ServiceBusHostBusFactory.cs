@@ -118,6 +118,8 @@ namespace MassTransit.AzureServiceBusTransport.Hosting
             public Uri ServiceUri { get; private set; }
 
             public TokenProvider TokenProvider { get; private set; }
+
+            public string CloudStorageConnectionString { get; set; }
         }
     }
 }

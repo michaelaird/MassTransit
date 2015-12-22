@@ -95,6 +95,7 @@ namespace MassTransit.AzureServiceBusTransport.Configuration
             public TransportType TransportType { get; set; }
             public AmqpTransportSettings AmqpTransportSettings { get; set; }
             public NetMessagingTransportSettings NetMessagingTransportSettings { get; set; }
+            public string CloudStorageConnectionString { get; set; }
         }
     }
 }

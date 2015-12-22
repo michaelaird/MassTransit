@@ -67,5 +67,10 @@ namespace MassTransit.AzureServiceBusTransport
         /// The net messaging settings
         /// </summary>
         NetMessagingTransportSettings NetMessagingTransportSettings { get; }
+
+        /// <summary>
+        /// The net messaging settings
+        /// </summary>
+        string CloudStorageConnectionString { get; }
     }
 }

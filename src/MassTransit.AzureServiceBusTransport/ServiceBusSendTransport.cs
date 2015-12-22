@@ -1,46 +1,59 @@
 ﻿// Copyright 2007-2015 Chris Patterson, Dru Sellers, Travis Smith, et. al.
-//  
+//
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not use
-// this file except in compliance with the License. You may obtain a copy of the 
-// License at 
-// 
-//     http://www.apache.org/licenses/LICENSE-2.0 
-// 
+// this file except in compliance with the License. You may obtain a copy of the
+// License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
 // Unless required by applicable law or agreed to in writing, software distributed
-// under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR 
-// CONDITIONS OF ANY KIND, either express or implied. See the License for the 
+// under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+// CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 namespace MassTransit.AzureServiceBusTransport
 {
-    using System;
-    using System.IO;
-    using System.Threading;
-    using System.Threading.Tasks;
     using Contexts;
     using Logging;
     using MassTransit.Pipeline;
     using Microsoft.ServiceBus.Messaging;
+    using Microsoft.WindowsAzure.Storage;
+    using Microsoft.WindowsAzure.Storage.Blob;
+    using System;
+    using System.IO;
+    using System.Threading;
+    using System.Threading.Tasks;
     using Transports;
-
 
     /// <summary>
     /// Send messages to an azure transport using the message sender.
-    /// 
+    ///
     /// May be sensible to create a IBatchSendTransport that allows multiple
     /// messages to be sent as a single batch (perhaps using Tx support?)
     /// </summary>
     public class ServiceBusSendTransport :
         ISendTransport
     {
-        static readonly ILog _log = Logger.Get<ServiceBusSendTransport>();
+        private static readonly ILog _log = Logger.Get<ServiceBusSendTransport>();
 
-        readonly SendObservable _observers;
-        readonly MessageSender _sender;
+        private readonly SendObservable _observers;
+        private readonly MessageSender _sender;
 
-        public ServiceBusSendTransport(MessageSender sender)
+        private const int maxMessageBodySize = 200 * 1024;
+        private readonly CloudBlobContainer _azureStorageContainer;
+
+        public ServiceBusSendTransport(MessageSender sender, ServiceBusHostSettings settings)
         {
             _observers = new SendObservable();
             _sender = sender;
+
+            if (!string.IsNullOrWhiteSpace(settings.CloudStorageConnectionString))
+            {
+                CloudStorageAccount storageAccount = CloudStorageAccount.Parse(settings.CloudStorageConnectionString);
+                CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+
+                // Retrieve reference to a previously created container.
+                CloudBlobContainer _azureStorageContainer = blobClient.GetContainerReference("MassTransitMessageStore");
+            }
         }
 
         async Task ISendTransport.Send<T>(T message, IPipe<SendContext<T>> pipe, CancellationToken cancelSend)
@@ -53,7 +66,7 @@ namespace MassTransit.AzureServiceBusTransport
 
                 using (Stream messageBodyStream = context.GetBodyStream())
                 {
-                    using (var brokeredMessage = new BrokeredMessage(messageBodyStream))
+                    using (var brokeredMessage = await GetBrokeredMessage(messageBodyStream))
                     {
                         brokeredMessage.ContentType = context.ContentType.MediaType;
                         brokeredMessage.ForcePersistence = context.Durable;
@@ -77,7 +90,7 @@ namespace MassTransit.AzureServiceBusTransport
                         {
                             brokeredMessage.SessionId = context.SessionId;
 
-                            if(context.ReplyToSessionId == null)
+                            if (context.ReplyToSessionId == null)
                                 brokeredMessage.ReplyToSessionId = context.SessionId;
                         }
 
@@ -99,6 +112,28 @@ namespace MassTransit.AzureServiceBusTransport
                 _observers.SendFault(context, ex).Wait(cancelSend);
 
                 throw;
+            }
+        }
+
+        private async Task<BrokeredMessage> GetBrokeredMessage(Stream messageBodyStream)
+        {
+            if (messageBodyStream.Length > maxMessageBodySize && _azureStorageContainer != null)
+            {
+                await _azureStorageContainer.CreateIfNotExistsAsync();
+
+                // Retrieve reference to a blob named "myblob".
+                CloudBlockBlob blockBlob = _azureStorageContainer.GetBlockBlobReference(Guid.NewGuid().ToString("N"));
+
+                await blockBlob.UploadFromStreamAsync(messageBodyStream);
+
+                BrokeredMessage message = new BrokeredMessage();
+                message.Properties["MassTransitMessageStore"] = blockBlob.StorageUri;
+
+                return message;
+            }
+            else
+            {
+                return new BrokeredMessage(messageBodyStream);
             }
         }
 
